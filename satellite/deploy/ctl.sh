@@ -93,8 +93,12 @@ case "$1" in
       exit 1
     fi
     wait_supervisors_gone
-    pidof quasar_launcher2 >/dev/null 2>&1 || $Q start >/dev/null 2>&1
-    echo "disabled, Yandex stack started"
+    if [ -f /data/quasar/disable_stock_launcher ]; then
+      echo "disabled; stock launcher remains blocked by /data/quasar/disable_stock_launcher"
+    else
+      pidof quasar_launcher2 >/dev/null 2>&1 || $Q start >/dev/null 2>&1
+      echo "disabled, Yandex stack started"
+    fi
     ;;
   restart)
     if stop_daemon; then

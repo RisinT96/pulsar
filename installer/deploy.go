@@ -62,6 +62,10 @@ func sha256File(p string) string {
 // set when autostart could not be (re)written; lost: the station has no autostart at all.
 func installOne(st station) (ok bool, note string, lost bool) {
 	s := st.serial
+	if opts.independent && st.code != "station-mini2" {
+		fmt.Fprintf(os.Stderr, "%s: --independent is currently supported only on Mini 2\n", s)
+		return false, "", false
+	}
 	bin := filepath.Join(root, "satellite", "build", st.arch, "pulsar")
 	if fi, err := os.Stat(bin); err != nil || fi.Size() == 0 {
 		fmt.Fprintf(os.Stderr, "%s: %s missing\n", s, bin)
@@ -93,6 +97,15 @@ func installOne(st station) (ok bool, note string, lost bool) {
 	fmt.Println()
 	if !healthCheck(s, changed, mark) {
 		return false, note, lost
+	}
+	if opts.independent {
+		if note != "" || lost {
+			fmt.Fprintln(os.Stderr, "--independent requires verified pulsar autostart")
+			return false, note, lost
+		}
+		if !installIndependent(s) {
+			return false, note, lost
+		}
 	}
 	_ = shTo(os.Stdout, s, dataDir+"/ctl.sh status; "+dataDir+"/ctl.sh log 5")
 	fmt.Println()

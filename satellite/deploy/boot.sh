@@ -25,7 +25,7 @@ fi
 
 # onboot.sh has started quasar in background before S99zpulsar runs; wait for it, then stop it.
 i=0
-while [ $i -lt 30 ] && ! pidof quasar_launcher2 >/dev/null 2>&1; do
+while [ ! -f /data/quasar/disable_stock_launcher ] && [ $i -lt 30 ] && ! pidof quasar_launcher2 >/dev/null 2>&1; do
   sleep 1
   i=$((i + 1))
 done

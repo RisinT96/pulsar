@@ -19,7 +19,7 @@ const (
 
 const usage = `pulsar-install: finds rooted Yandex Stations on the local network and installs or updates pulsar.
 
-  pulsar-install [--list] [--scan] [--ssh] [--no-enable] [--yes] [ip[:port] ...]
+  pulsar-install [--list] [--scan] [--ssh] [--no-enable] [--independent] [--yes] [ip[:port] ...]
 
 Without addresses: finds Yandex Stations via mDNS or, with --scan, by scanning the /24
 of the default-route interface for adb (port 5555); connects, identifies the model and offers
@@ -39,7 +39,9 @@ the supported, rooted stations found. Per station:
   satellite is restarted with the new binary and, after ~10 s, checked (process alive, no crash
   report in the log); on failure the previous binary is put back (asked, or automatic with --yes).
 In a repository checkout (satellite/Makefile present) the daemon is built first
-(make; ssh/build.sh for --ssh). Outside /data only /etc/init.d/S99zpulsar is written. Re-running is safe.
+(make; ssh/build.sh for --ssh). Normally only /etc/init.d/S99zpulsar is written outside /data.
+--independent opts into a Mini 2 launcher guard and public DNS; it also modifies
+/system/vendor/quasar/run.sh and saves backups. Firmware NTP is unchanged.
 adb: from PATH, else platform-tools/ next to the installer, else downloaded there
 from dl.google.com (Android SDK Platform-Tools 37.0.1; Google's terms apply).
 --list only shows what was found; --yes installs to every station found without asking.
@@ -47,8 +49,8 @@ from dl.google.com (Android SDK Platform-Tools 37.0.1; Google's terms apply).
 `
 
 type options struct {
-	ssh, noEnable, yes, list, scan bool
-	targets                        []string
+	ssh, noEnable, yes, list, scan, independent bool
+	targets                                     []string
 }
 
 var (
@@ -74,6 +76,8 @@ func parseArgs(args []string) (options, error) {
 			o.ssh = true
 		case a == "--no-enable":
 			o.noEnable = true
+		case a == "--independent":
+			o.independent = true
 		case a == "-y" || a == "--yes":
 			o.yes = true
 		case a == "--list":
@@ -89,6 +93,9 @@ func parseArgs(args []string) (options, error) {
 		default:
 			o.targets = append(o.targets, a+":5555")
 		}
+	}
+	if o.independent && o.noEnable {
+		return o, fmt.Errorf("--independent requires an enabled, health-checked daemon")
 	}
 	return o, nil
 }
