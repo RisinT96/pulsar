@@ -119,7 +119,7 @@ if ! /etc/init.d/S49chrony restart || ! pidof chronyd >/dev/null 2>&1; then
   echo 'Chrony restart failed' >&2
   exit 1
 fi
-cp "$0" "$D/independent.sh.new" && chmod 755 "$D/independent.sh.new" && mv "$D/independent.sh.new" "$D/independent.sh"
+cp "$0" "$D/independent.sh.new" && chmod 755 "$D/independent.sh.new" && mv "$D/independent.sh.new" "$D/independent.sh" || { echo 'cannot install restore script' >&2; exit 1; }
 : > "$FLAG"
 sync
 echo 'Launcher blocked, public DNS and NTP Pool configured. DHCP may add DNS servers.'

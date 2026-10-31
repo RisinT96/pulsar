@@ -92,8 +92,11 @@ func installOne(st station) (ok bool, note string, lost bool) {
 	if supChanged {
 		action = "reload"
 	}
-	_ = shTo(os.Stdout, s, "if [ -f "+dataDir+"/enabled ] && { pidof supervise.sh || pidof pulsar; } >/dev/null; then "+
-		dataDir+"/ctl.sh "+action+"; else "+dataDir+"/ctl.sh enable; fi")
+	if err := shTo(os.Stdout, s, "if [ -f "+dataDir+"/enabled ] && { pidof supervise.sh || pidof pulsar; } >/dev/null; then "+
+		dataDir+"/ctl.sh "+action+"; else "+dataDir+"/ctl.sh enable; fi"); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: failed to start or restart pulsar: %v\n", s, err)
+		return false, note, lost
+	}
 	fmt.Println()
 	if !healthCheck(s, changed, mark) {
 		return false, note, lost

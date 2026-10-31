@@ -54,6 +54,7 @@ class IndependentSetupTest(unittest.TestCase):
         self.assertIn("1.1.1.1", (self.root / "data/unbound.conf.head").read_text())
         self.assertIn("pool pool.ntp.org iburst", (self.root / "data/chrony.conf").read_text())
         self.assertIn("CHRONY_ARGS=", (self.root / "etc/default/chrony").read_text())
+        self.assertTrue((self.root / "data/pulsar/independent.sh").is_file())
         result = self.run_setup("restore")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.root / "data/quasar/disable_stock_launcher").exists())
@@ -79,6 +80,17 @@ class IndependentSetupTest(unittest.TestCase):
         result = self.run_setup("install")
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse((self.root / "etc/default/chrony").exists())
+        self.assertFalse((self.root / "data/quasar/disable_stock_launcher").exists())
+
+    def test_restore_script_copy_failure_is_reported(self):
+        self.script = self.root / "data/pulsar/independent.sh.new"
+        source = Path("satellite/deploy/independent.sh").read_text()
+        for path in ("/data", "/system", "/etc", "/proc/mounts"):
+            source = source.replace(path, str(self.root) + path)
+        self.script.write_text(source)
+        result = self.run_setup("install")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("cannot install restore script", result.stderr)
         self.assertFalse((self.root / "data/quasar/disable_stock_launcher").exists())
 
     def test_refuses_guard_without_original_backup(self):

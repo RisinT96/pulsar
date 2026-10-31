@@ -12,19 +12,24 @@
 D=${PULSAR_DIR:-/data/pulsar}
 Q=${PULSAR_Q:-/system/vendor/quasar/q}
 
-# SIGTERM, wait up to 10 s for the process to go, then SIGKILL. Returns 1 if it is still there.
+# Wait for the original process IDs, not their replacements: the supervisor may restart pulsar
+# before this command has observed the old process exit.
 stop_daemon() {
-  pidof pulsar >/dev/null 2>&1 || return 0
-  killall pulsar 2>/dev/null
+  pids=$(pidof pulsar) || return 0
+  old_alive() {
+    for p in $pids; do kill -0 "$p" 2>/dev/null && return 0; done
+    return 1
+  }
+  kill $pids 2>/dev/null || true
   i=0
-  while [ $i -lt 10 ] && pidof pulsar >/dev/null 2>&1; do sleep 1; i=$((i + 1)); done
-  if pidof pulsar >/dev/null 2>&1; then
+  while [ $i -lt 10 ] && old_alive; do sleep 1; i=$((i + 1)); done
+  if old_alive; then
     echo "did not exit in 10 s, killing"
-    killall -9 pulsar 2>/dev/null
+    kill -9 $pids 2>/dev/null || true
     i=0
-    while [ $i -lt 5 ] && pidof pulsar >/dev/null 2>&1; do sleep 1; i=$((i + 1)); done
+    while [ $i -lt 5 ] && old_alive; do sleep 1; i=$((i + 1)); done
   fi
-  ! pidof pulsar >/dev/null 2>&1
+  ! old_alive
 }
 
 # Starts supervise.sh unless one runs; waits until it does. Ignores SIGHUP: when called through

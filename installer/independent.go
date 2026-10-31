@@ -33,7 +33,7 @@ func installIndependent(s string) bool {
 		return false
 	}
 	local := filepath.Join(root, "satellite", "deploy", "independent.sh")
-	remote := dataDir + "/independent.sh.new"
+	remote := dataDir + "/independent-install.tmp"
 	if push(s, local, remote) != nil {
 		return false
 	}
