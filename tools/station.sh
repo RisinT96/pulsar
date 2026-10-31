@@ -3,13 +3,14 @@
 # PULSAR_TAG: free-form tag of the work holding the lock (one word, no spaces).
 set -eu
 usage() {
-  echo "usage: PULSAR_TAG=<tag> $0 midi|lite2|mini lock MINUTES|unlock|break-lock|stop|start|push FILE...|test-start|test-stop|test-log [N]|swap BINARY|restore|cleanup|status|log [N]" >&2
+  echo "usage: PULSAR_TAG=<tag> $0 midi|lite2|mini2|mini lock MINUTES|unlock|break-lock|stop|start|push FILE...|test-start|test-stop|test-log [N]|swap BINARY|restore|cleanup|status|log [N]" >&2
   exit 2
 }
 [ $# -ge 2 ] || usage
 case "$1" in
   midi) H=${PULSAR_MIDI:?PULSAR_MIDI is not set} ;;
   lite2) H=${PULSAR_LITE2:?PULSAR_LITE2 is not set} ;;
+  mini2) H=${PULSAR_MINI2:?PULSAR_MINI2 is not set} ;;
   mini) H=${PULSAR_MINI:?PULSAR_MINI is not set} ;;
   *) usage ;;
 esac
