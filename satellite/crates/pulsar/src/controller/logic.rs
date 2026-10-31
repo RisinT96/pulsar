@@ -9,6 +9,7 @@ use pulsar_core::model::Model;
 use pulsar_esphome::{DeviceIdentity, MediaState, VaEvent};
 use pulsar_hw::Rgb;
 use pulsar_media::PlayState;
+use pulsar_spotify::Playback as SpotifyPlayback;
 
 /// After the wake word a stock command ("Алиса, громче") is handled locally if it is heard
 /// within this window; the HA pipeline is then cancelled.
@@ -292,17 +293,36 @@ pub fn command_allowed(
 }
 
 /// HA media player state. ANNOUNCING only for HA announcements, not for earcons, timer alarms or
-/// pipeline TTS on the same channel.
-pub fn media_state(announcing: bool, music: PlayState, sendspin_streaming: bool) -> MediaState {
+/// pipeline TTS on the same channel. Spotify is another remote source like Sendspin; a paused
+/// Spotify still shows as paused, while its loading/playing state wins over an idle local player.
+pub fn media_state(
+    announcing: bool,
+    music: PlayState,
+    sendspin_streaming: bool,
+    spotify: SpotifyPlayback,
+) -> MediaState {
     if announcing {
         return MediaState::Announcing;
     }
-    match music {
-        PlayState::Playing | PlayState::Loading => MediaState::Playing,
-        PlayState::Paused if sendspin_streaming => MediaState::Playing,
-        PlayState::Paused => MediaState::Paused,
-        _ if sendspin_streaming => MediaState::Playing,
-        _ => MediaState::Idle,
+    if matches!(music, PlayState::Playing | PlayState::Loading)
+        || sendspin_streaming
+        || matches!(spotify, SpotifyPlayback::Playing | SpotifyPlayback::Loading)
+    {
+        MediaState::Playing
+    } else if music == PlayState::Paused || spotify == SpotifyPlayback::Paused {
+        MediaState::Paused
+    } else {
+        MediaState::Idle
+    }
+}
+
+/// The Spotify state shown to HA: a session that lost the speaker to HA media or Sendspin is
+/// reported as idle, so its stop is not mistaken for a user-initiated pause.
+pub fn spotify_state(spotify: SpotifyPlayback, owned: bool) -> SpotifyPlayback {
+    if owned {
+        spotify
+    } else {
+        SpotifyPlayback::Idle
     }
 }
 
@@ -361,6 +381,7 @@ pub fn idle_for_update(
     timer_ringing: bool,
     music: PlayState,
     sendspin_streaming: bool,
+    spotify_active: bool,
     zigbee_flashing: bool,
 ) -> bool {
     phase == Phase::Idle
@@ -368,6 +389,7 @@ pub fn idle_for_update(
         && !timer_ringing
         && music != PlayState::Playing
         && !sendspin_streaming
+        && !spotify_active
         && !zigbee_flashing
 }
 

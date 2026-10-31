@@ -512,6 +512,7 @@ impl Controller {
             self.timer_ringing,
             self.player.state(Channel::Music),
             self.sendspin_streaming(),
+            self.spotify_active(),
             self.zigbee_flashing(),
         )
     }

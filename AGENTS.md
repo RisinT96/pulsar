@@ -22,6 +22,14 @@ echo cancellation use the firmware's own proprietary libraries, loaded with `dlo
 they are never copied into the repo. Stations on one LAN arbitrate the wake word over UDP
 broadcast (port 6054) so that only the one that heard it loudest answers.
 
+Spotify Connect (all models, librespot 0.8) runs beside Sendspin and the HA media player. Only one
+source owns the speaker: Spotify stops local HA media and makes Sendspin leave its group; starting
+either of those pauses Spotify and drops its ownership. Spotify's remote volume is the controller's
+global volume, not a second mixer. Credentials live in `/data/pulsar/spotify/credentials.json`
+(0600, directory 0700); deleting the file and restarting requires the station to be selected in
+Spotify again. `PULSAR_PORT_OFFSET` disables Spotify entirely so a test instance never appears in
+the Spotify app.
+
 ## Layout
 
 | Path | Content |
@@ -35,6 +43,7 @@ broadcast (port 6054) so that only the one that heard it loudest answers.
 | `satellite/crates/pulsar-audio/` | microphone front-end (`frontend.rs`): capture thread (ALSA → FIFO) + processing thread: Yandex VQE → wake + command spotters → 16 kHz stream; music features of the speaker reference (`spectrum.rs`: 512-point FFT at 16 kHz → 8 bands, loudness, beats as `MusicFrame`) while the visualization can be shown; C API of libyandex_evil (`engine/`); bins `ww_offline`, `frontend_probe` |
 | `satellite/crates/pulsar-media/` | playback through the firmware's GStreamer (`libquasar_gstreamer.so`, dlopen, `gst.rs`), channels Music / Announce on a GLib thread; Music plays through alsasink, Announce is decoded into an fdsink and played by its own ALSA writer (`pcm_out.rs`: 200 ms prime, no buffering pauses, `Done` after the device played the last sample); `Mixer` = ALSA "Master Playback Volume" (softvol of `Model::playback_pcm`: `speakers`, `default` on the Mini 2; on the Mini first generation the controller applies a software master (`volume::master_gain`)); bin `player_probe` |
 | `satellite/crates/pulsar-sendspin/` | Sendspin player on top of sendspin-cpp (C shim in `shim/`, linked statically by `build.rs` in the Makefile builds), own ALSA sink on the playback dmix (`Model::playback_pcm`); roles player, metadata, controller, visualizer (8 log bands 40 Hz–7.6 kHz, loudness, beats → `MusicFrame`); bin `sendspin_probe` |
+| `satellite/crates/pulsar-spotify/` | Spotify Connect on librespot 0.8 (MIT): discovery / Spirc actor state machine, own ALSA sink on `Model::playback_pcm` (44.1 kHz stereo S16, controller master gain), remote volume through the controller's mixer; `credentials.json` in `/data/pulsar/spotify` |
 | `satellite/crates/pulsar-hw/` | LED ring / logo (framebuffers behind ledfb triggers, or sysfs brightness without one; `leds.rs`: output, case matrix, layer compositor, fades), pure rendering of voice states / one-shots / effects / music styles (`led_fx.rs`), input (touch keys, `SW_MUTE_DEVICE`, a `KEY_*` keypad (`adc_keypad`, the Mini) or a polled sysfs GPIO (`Model::mute_gpio`); `input.rs`); bin `hw_probe` |
 | `satellite/crates/pulsar-clock/` | clock (sysfs segments, per-LED brightness; `clock.rs`: layers), pure rendering of the clock's stock animations and music levels (`clock_fx.rs`), font, light sensor (`ltr308als01`, `light_sensor.rs`) |
 | `satellite/crates/pulsar-zigbee/` | Midi Zigbee radio: zbhci link to the Telink chip (`link.rs`), coordinator on pulsar's firmware + ZDO to the coordinator itself (`coordinator.rs`), deCONZ-protocol TCP server for Zigbee2MQTT / ZHA (`deconz.rs`), router control (`router.rs`), `.ybl` parsing + XMODEM upload through the radio's bootloader (`flasher.rs`), role / firmware orchestration (`service.rs`), role table (`roles.rs`), byte order helpers (`bytes.rs`); bin `zigbee_probe [port] \| info \| flash <image>` (coordinator + deCONZ server on another port without the daemon; firmware identification; writing an image) |
@@ -73,10 +82,13 @@ zig: its station clippy only compiles ring's C), a host C compiler (`cc`, for `m
 git, curl, patch; cmake ≥ 3.16 and ninja for sendspin-cpp only; Go 1.27+ (installer). The first
 build fetches pinned dependencies into `satellite/third_party/src/` and builds sendspin-cpp per
 architecture into `satellite/build/<arch>/third_party/`; cargo's output is in `satellite/target/`.
+Spotify Connect uses librespot 0.8 with default features off (MIT): `rustls-tls-webpki-roots`
+replaces native-tls, and pulsar supplies its own sink and mixer instead of an ALSA/rodio backend.
 Targets: aarch64 for glibc 2.36 (the Midi's usual userland), armhf for glibc 2.23 (the Mini's;
 the Lite 2, Mini 2, Mini 3 and armhf Midi images have 2.30 and run the same binary).
 libasound is loaded at runtime (`dlopen`, `pulsar-alsa`), nothing ALSA is linked. Outputs per arch:
-`pulsar` (stripped, the one deployed) and `pulsar.debug` (unstripped, line tables) for
+`pulsar` (stripped with Rust's bundled `rust-objcopy`, the one deployed) and `pulsar.debug`
+(unstripped, line tables) for
 `addr2line -f -e` on the crash report the daemon writes to the log (`=== CRASH`; non-PIE,
 `-C relocation-model=static`: addresses are absolute; `handler=` is the address of
 `pulsar_crash_handler`; aarch64 adds an `fp:` frame-pointer chain, armhf reports pc/lr only). The
@@ -148,12 +160,13 @@ ssh root@<ip> 'cd /data/pulsar && cp pulsar pulsar.prev &&
 ```
 
 Device layout: `/data/pulsar/{pulsar,.prev,.bad,boot.sh,supervise.sh,
-ctl.sh,state.conf,api_key,enabled,sendspin/,zigbee-coordinator.ybl,zigbee-router.ybl,asound.conf}`
+ctl.sh,state.conf,api_key,enabled,sendspin/,spotify/,zigbee-coordinator.ybl,zigbee-router.ybl,asound.conf}`
 (`asound.conf`: Mini only). Outside
 /data: `/etc/init.d/S99zpulsar` (autostart, written by the installer). `api_key`: ESPHome Noise PSK
 (base64 of 32 bytes, 0600), written by HA's auto-provisioning or `ctl.sh api-key`; absent =
 plaintext (Noise with the all-zeros key is then accepted so HA can provision); corrupt = API fails
-closed. `.bad`: binary replaced by the crash-loop rollback. Log: `/tmp/pulsar.log`
+closed. `spotify/credentials.json`: Spotify Connect account token (0600, directory 0700); deleting
+it and restarting forgets the account. `.bad`: binary replaced by the crash-loop rollback. Log: `/tmp/pulsar.log`
 (`ctl.sh log N`; rotated at 1 MB by `supervise.sh`, one `.1` kept). Boot chain: busybox init →
 `rcS` (runs `/etc/init.d/S??*` in order with `start`, waiting for each) → `S97quasar` (Midi) /
 `S99quasar` (Lite 2, Mini 2) / `S99onboot.sh` (Mini) → `onboot.sh` (adbd via `activate_adb.sh check`, quasar in

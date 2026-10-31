@@ -17,6 +17,7 @@ pulsar-hw = { path = "../pulsar-hw" }
 pulsar-lan = { path = "../pulsar-lan" }
 pulsar-media = { path = "../pulsar-media" }
 pulsar-sendspin = { path = "../pulsar-sendspin" }
+pulsar-spotify = { path = "../pulsar-spotify" }
 pulsar-update = { path = "../pulsar-update" }
 pulsar-zigbee = { path = "../pulsar-zigbee" }
 tokio = { workspace = true }

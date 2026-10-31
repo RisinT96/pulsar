@@ -20,6 +20,13 @@ CARGO ?= cargo
 CARGO_ZIGBUILD ?= cargo-zigbuild
 ARCHES := aarch64 armhf
 
+# The stripped deployed binary is copied from cargo's output with Rust's bundled LLVM objcopy.
+# Zig 0.17 no longer implements `zig objcopy`; rust-objcopy ships with the rustc component of the
+# toolchain installed from rust-toolchain.toml.
+RUSTC ?= rustc
+RUST_OBJCOPY := $(shell $(RUSTC) --print target-libdir 2>/dev/null | sed 's,/lib$$,/bin/rust-objcopy,')
+OBJCOPY ?= $(if $(wildcard $(RUST_OBJCOPY)),$(RUST_OBJCOPY),$(ZIG) objcopy)
+
 # zig for cargo-zigbuild: arch builds and the station clippy of `make check`. cargo-zigbuild would
 # prefer `python3 -m ziglang` (any version) over the zig checked here: point it at that zig and at
 # a python that does not exist.
@@ -127,7 +134,7 @@ binary: $(SS_STAMP) FORCE
 	+$(ZIGBUILD) -p pulsar --bin pulsar
 	@mkdir -p $(BUILD)
 	cp $(OUT)/pulsar $(BUILD)/pulsar.debug
-	$(ZIG) objcopy --strip-all $(BUILD)/pulsar.debug $(BUILD)/pulsar
+	$(OBJCOPY) --strip-all $(BUILD)/pulsar.debug $(BUILD)/pulsar
 
 # Without pulsar: `make binary tools` copies target/.../pulsar outside cargo's lock. After binary
 # when both are asked for: two cargo-zigbuild starting at once race on creating their zig wrapper
@@ -135,13 +142,13 @@ binary: $(SS_STAMP) FORCE
 tools: $(SS_STAMP) FORCE | $(filter binary,$(MAKECMDGOALS))
 	+$(ZIGBUILD) --workspace --exclude pulsar --bins
 	@mkdir -p $(BUILD)/tools
-	for t in $(TOOLS); do $(ZIG) objcopy --strip-all $(OUT)/$$t $(BUILD)/tools/$$t || exit 1; done
+	for t in $(TOOLS); do $(OBJCOPY) --strip-all $(OUT)/$$t $(BUILD)/tools/$$t || exit 1; done
 
 # Same ordering for a single tool asked together with binary.
 $(BUILD)/tools/%: $(SS_STAMP) FORCE | $(filter binary,$(MAKECMDGOALS))
 	+$(ZIGBUILD) --bin $*
 	@mkdir -p $(dir $@)
-	$(ZIG) objcopy --strip-all $(OUT)/$* $@
+	$(OBJCOPY) --strip-all $(OUT)/$* $@
 
 # Fetch (once) + configure + build the Sendspin library and its dependencies.
 $(SS_STAMP): third_party/fetch.sh third_party/CMakeLists.txt third_party/toolchain/zig.cmake

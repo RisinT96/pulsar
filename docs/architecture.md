@@ -21,6 +21,7 @@ satellite/
     pulsar-audio/         # микрофонный фронтенд, спектр (bins ww_offline, frontend_probe)
     pulsar-media/         # player, mixer (bin player_probe)
     pulsar-sendspin/      # shim/ (C++), Rust-сервис (bin sendspin_probe)
+    pulsar-spotify/       # Spotify Connect на librespot, собственный ALSA-sink
     pulsar-hw/            # leds, led_fx, input (bin hw_probe)
     pulsar-clock/         # clock, clock_fx, light_sensor
     pulsar-zigbee/        # link, coordinator, deconz, router, flasher, service (bin zigbee_probe)
@@ -36,6 +37,10 @@ satellite/
   - `rustls` = `{ default-features = false, features = ["ring", "std", "tls12", "logging"] }`
   - `rustls-pki-types` = `{ features = ["std"] }`
   - `ring`, `log` (`features = ["std"]`), `libc`, `libloading`
+  - `librespot-{core,playback,connect,discovery}` = `0.8.0`: `default-features = false`, TLS через
+    `rustls-tls-webpki-roots`, discovery через `with-libmdns`; ALSA/rodio-backend не включаются,
+    потому что звук пишет собственный sink, а громкость принадлежит контроллеру
+  - `futures-util` = `0.3.34` (`features = ["std"]`) — `StreamExt` для discovery
   - `snow` = `{ default-features = false, features = ["use-chacha20poly1305", "use-sha2", "use-curve25519", "use-getrandom"] }` — чистый Rust, только примитивы `Noise_NNpsk0_25519_ChaChaPoly_SHA256`. Фичи по умолчанию не нужны: `std` в snow 0.10.0 включает `ring` (не-weak `ring/std`) вместе с неиспользуемыми AES-GCM и BLAKE2
   - `socket2` = `{ features = ["all"] }`
   - `cc` (build-зависимость шима)
@@ -407,6 +412,37 @@ println!("cargo:rustc-link-lib=c++");
   дисплеи. `stopped` завершает удерживаемый конец сразу.
 - `yield_to_local()` только шлёт `client/leave`, `streaming` синхронно не меняет.
 
+### `pulsar-spotify`
+
+- `spawn(Config, volume)` возвращает `Handle` и поток `Event::{Playback, Volume}`. `Config.name` —
+  имя в Spotify, `Config.device_id` — стабильный `id.name` станции (не меняется между запусками),
+  `state_dir` — `/data/pulsar/spotify`. Каталог создаётся с правами `0700`, `credentials.json` —
+  `0600`; при отказе Spotify в учётных данных файл удаляется.
+- Discovery-сервер объявляет колонку всё время работы. Выбор устройства в Spotify присылает
+  учётные данные: актор сохраняет их, подключается через `Spirc` и держит сессию. Кэшированные
+  учётные данные пробуются сразу после запуска, затем раз в 15 с после стабильной сессии;
+  discovery после ошибки перезапускается через 60 с. Подключение ограничено 45 с, сессия,
+  закрывшаяся раньше 10 с, считается нестабильной и ждёт нового выбора в Spotify; ошибки
+  `Unauthenticated` / `PermissionDenied` очищают кэш. Выбор другого аккаунта (другие учётные
+  данные от discovery) закрывает текущую сессию и подключается заново.
+- `PlayerEvent` отображается в `Playback`: `Loading` / `Playing` / `Paused`, а `Stopped` и
+  `Unavailable` — в `Idle`. `Idle` также означает «сессии нет». Пауза сохраняет владение
+  источником, пока его не заберут HA или Sendspin.
+- `Mixer` не трогает ALSA: удалённая громкость приходит в контроллер и меняет общую громкость
+  колонки, пока Spotify владеет динамиком; после перехода к HA или Sendspin такие события
+  игнорируются. `get_soft_volume()` возвращает `NoOpVolume`, иначе librespot применил бы вторую
+  логарифмическую кривую поверх штатной громкости станции.
+- Sink открывает `Model::playback_pcm` через `pulsar_alsa::open_playback` как 44.1 кГц / 2 канала /
+  S16LE, переиспользует буфер и применяет текущий gain контроллера (громкость, mute, duck) до
+  записи. `writei` повторяется после `EINTR` / `EAGAIN` с `snd_pcm_wait` по 100 мс; другие ошибки
+  проходят через `snd_pcm_recover`.
+- Источники вытесняют друг друга: `Loading` / `Playing` от Spotify останавливает локальную музыку
+  HA и выводит колонку из Sendspin; старт HA-медиа или Sendspin ставит Spotify на паузу и
+  снимает с него владение. Пока Spotify владеет колонкой, HA `Play` / `Pause` / `Stop` /
+  `Toggle` и голосовые команды идут в `Spirc` (`Stop` = пауза). Пауза владение не снимает;
+  `Idle` (остановка, конец очереди, разрыв соединения) и вытеснение снимают его. После
+  вытеснения Spotify больше не показывается как активный.
+
 ### `pulsar-hw` и `pulsar-clock`
 
 - Ошибка открытия framebuffer / sysfs логируется («LEDs unavailable», «clock unavailable»), вывод
@@ -439,6 +475,6 @@ println!("cargo:rustc-link-lib=c++");
 - `PULSAR_PORT_OFFSET=<u16>` (по умолчанию 0) прибавляется ко всем четырём портам через checked
   add. Если значение не разбирается как u16 или сумма переполняется — лог
   `invalid PULSAR_PORT_OFFSET` и выход с кодом 1 до запуска сервисов.
-- При ненулевом offset контроллер не создаёт mDNS-респондер: HA и Music Assistant тестовый
-  экземпляр не видят.
+- При ненулевом offset контроллер не создаёт mDNS-респондер и не запускает Spotify Connect: HA,
+  Music Assistant и Spotify тестовый экземпляр не видят.
 - Демон всегда берёт порты из конфигов, хардкода нет.

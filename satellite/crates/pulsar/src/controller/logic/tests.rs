@@ -283,22 +283,28 @@ fn command_permission() {
 fn media_player_state() {
     use MediaState as M;
     use PlayState as P;
-    for (announcing, music, ss, want) in [
-        (true, P::Playing, true, M::Announcing),
-        (true, P::Idle, false, M::Announcing),
-        (false, P::Playing, false, M::Playing),
-        (false, P::Loading, false, M::Playing),
-        (false, P::Paused, false, M::Paused),
-        (false, P::Paused, true, M::Playing),
-        (false, P::Idle, false, M::Idle),
-        (false, P::Idle, true, M::Playing),
-        (false, P::Error, false, M::Idle),
-        (false, P::Error, true, M::Playing),
+    use pulsar_spotify::Playback as S;
+    for (announcing, music, ss, spotify, want) in [
+        (true, P::Playing, true, S::Idle, M::Announcing),
+        (true, P::Idle, false, S::Paused, M::Announcing),
+        (false, P::Playing, false, S::Idle, M::Playing),
+        (false, P::Loading, false, S::Idle, M::Playing),
+        (false, P::Paused, false, S::Idle, M::Paused),
+        (false, P::Paused, true, S::Idle, M::Playing),
+        (false, P::Paused, false, S::Playing, M::Playing),
+        (false, P::Idle, false, S::Playing, M::Playing),
+        (false, P::Idle, false, S::Loading, M::Playing),
+        (false, P::Idle, false, S::Paused, M::Paused),
+        (false, P::Idle, false, S::Idle, M::Idle),
+        (false, P::Idle, true, S::Idle, M::Playing),
+        (false, P::Error, false, S::Idle, M::Idle),
+        (false, P::Error, true, S::Idle, M::Playing),
+        (false, P::Error, false, S::Paused, M::Paused),
     ] {
         assert_eq!(
-            media_state(announcing, music, ss),
+            media_state(announcing, music, ss, spotify),
             want,
-            "{announcing} {music:?} {ss}"
+            "{announcing} {music:?} {ss} {spotify:?}"
         );
     }
 }
@@ -312,6 +318,15 @@ fn ducking() {
     assert!(want_duck(Phase::Idle, true, false, false));
     assert!(want_duck(Phase::Idle, false, true, false));
     assert!(want_duck(Phase::Idle, false, false, true));
+}
+
+#[test]
+fn spotify_state_follows_ownership() {
+    use pulsar_spotify::Playback as S;
+    for state in [S::Idle, S::Loading, S::Playing, S::Paused] {
+        assert_eq!(spotify_state(state, true), state);
+        assert_eq!(spotify_state(state, false), S::Idle);
+    }
 }
 
 #[test]
@@ -342,7 +357,7 @@ fn volume_click_gating() {
 
 #[test]
 fn idle_and_auto_update() {
-    let idle = |phase, a, r, m, ss, z| idle_for_update(phase, a, r, m, ss, z);
+    let idle = |phase, a, r, m, ss, z| idle_for_update(phase, a, r, m, ss, false, z);
     assert!(idle(
         Phase::Idle,
         false,
@@ -415,6 +430,21 @@ fn idle_and_auto_update() {
         false,
         true
     ));
+    // Spotify playing or loading delays an automatic update; paused Spotify does not.
+    for spotify_active in [false, true] {
+        assert_eq!(
+            idle_for_update(
+                Phase::Idle,
+                false,
+                false,
+                PlayState::Idle,
+                false,
+                spotify_active,
+                false
+            ),
+            !spotify_active
+        );
+    }
 
     use AutoUpdate::*;
     let cur = "v1.0.0";

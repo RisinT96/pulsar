@@ -5,6 +5,7 @@ use pulsar_core::{ClockShot, now_ms};
 use pulsar_esphome::{MediaCommand, MediaCommandRequest};
 use pulsar_media::{Channel, PlayState};
 use pulsar_sendspin::SendspinEvent;
+use pulsar_spotify::{Playback as SpotifyPlayback, Transport as SpotifyTransport};
 
 use super::logic::{self, cxx_max, cxx_min};
 use super::{Controller, DUCK_GAIN, Pending, SOUNDS};
@@ -40,6 +41,9 @@ impl Controller {
         if let Some(ss) = &self.sendspin {
             ss.set_duck_gain(music);
         }
+        if let Some(spotify) = &self.spotify {
+            spotify.gain(music);
+        }
     }
 
     pub(super) fn set_muted(&mut self, m: bool) {
@@ -48,6 +52,9 @@ impl Controller {
         self.apply_gains();
         if let Some(ss) = &self.sendspin {
             ss.report_volume(self.st.volume, self.st.muted);
+        }
+        if let Some(spotify) = &self.spotify {
+            spotify.volume(self.st.volume);
         }
         self.publish_media();
         self.persist();
@@ -74,6 +81,9 @@ impl Controller {
         }
         if let Some(ss) = &self.sendspin {
             ss.report_volume(self.st.volume, self.st.muted);
+        }
+        if let Some(spotify) = &self.spotify {
+            spotify.volume(self.st.volume);
         }
         self.publish_media();
         self.persist();
@@ -104,6 +114,7 @@ impl Controller {
             self.announcing,
             self.player.state(Channel::Music),
             self.sendspin_streaming(),
+            self.spotify_state(),
         );
         self.api.publish_media(s, self.st.volume, self.st.muted);
         self.update_music();
@@ -111,8 +122,9 @@ impl Controller {
 
     pub(super) fn update_music(&self) {
         let ps = self.player.state(Channel::Music);
-        let media =
-            matches!(ps, PlayState::Playing | PlayState::Loading) || self.sendspin_streaming();
+        let media = matches!(ps, PlayState::Playing | PlayState::Loading)
+            || self.sendspin_streaming()
+            || self.spotify_active();
         self.leds.set_media_playing(media);
         self.clock.set_media_playing(media);
         // The speaker-reference analysis only runs while its result can be shown.
@@ -135,6 +147,14 @@ impl Controller {
                 let id = self.player.play(Channel::Announce, vec![url]);
                 self.pending.insert(id, Pending::MediaAnnounce { seq });
             } else {
+                // HA media takes the speaker from Spotify. A paused Spotify loses ownership too,
+                // so the next Play/Resume from HA reaches the local channel.
+                if self.spotify_active()
+                    && let Some(s) = &self.spotify
+                {
+                    s.transport(SpotifyTransport::Pause);
+                }
+                self.spotify_owned = false;
                 if let Some(ss) = &self.sendspin {
                     ss.yield_to_local(); // HA media takes the speaker from Sendspin
                 }
@@ -147,6 +167,25 @@ impl Controller {
         if let Some(c) = cmd.command {
             let ss_on = self.sendspin_streaming();
             let music = || self.player.state(Channel::Music);
+            if self.spotify_owned
+                && let Some(s) = &self.spotify
+            {
+                let command = match c {
+                    MediaCommand::Play => Some(SpotifyTransport::Play),
+                    MediaCommand::Pause | MediaCommand::Stop => Some(SpotifyTransport::Pause),
+                    MediaCommand::Toggle => Some(if self.spotify_active() {
+                        SpotifyTransport::Pause
+                    } else {
+                        SpotifyTransport::Play
+                    }),
+                    _ => None,
+                };
+                if let Some(command) = command {
+                    s.transport(command);
+                    self.publish_media();
+                    return;
+                }
+            }
             match c {
                 MediaCommand::Play => {
                     if ss_on
@@ -209,6 +248,15 @@ impl Controller {
     pub(super) fn on_sendspin(&mut self, ev: SendspinEvent) {
         match ev {
             SendspinEvent::Stream(active) => {
+                if active
+                    && self.spotify_active()
+                    && let Some(s) = &self.spotify
+                {
+                    s.transport(SpotifyTransport::Pause);
+                }
+                if active {
+                    self.spotify_owned = false;
+                }
                 // Music Assistant took over the speaker: the HA media channel yields to it.
                 if active && self.player.state(Channel::Music) != PlayState::Idle {
                     self.player.stop(Channel::Music);
@@ -244,5 +292,43 @@ impl Controller {
                 self.clock.music_frame(f, true);
             }
         }
+    }
+
+    pub(super) fn on_spotify(&mut self, event: pulsar_spotify::Event) {
+        match event {
+            pulsar_spotify::Event::Playback(state) => {
+                self.spotify_playback = state;
+                if state == SpotifyPlayback::Idle {
+                    self.spotify_owned = false;
+                }
+                if matches!(state, SpotifyPlayback::Playing | SpotifyPlayback::Loading) {
+                    self.spotify_owned = true;
+                    if self.player.state(Channel::Music) != PlayState::Idle {
+                        self.player.stop(Channel::Music);
+                    }
+                    if let Some(ss) = &self.sendspin {
+                        ss.yield_to_local();
+                    }
+                }
+                self.publish_media();
+            }
+            // Spotify's remote slider is the station's global volume while Spotify owns the
+            // speaker. After HA or Sendspin took it over it must not change their volume.
+            pulsar_spotify::Event::Volume(volume) if self.spotify_owned => {
+                self.set_volume(volume, false);
+            }
+            pulsar_spotify::Event::Volume(volume) => {
+                debug!("spotify volume {volume:.3} ignored: speaker is not Spotify's");
+            }
+        }
+    }
+
+    /// The Spotify actor stopped without sending `Idle` (it panicked or its task ended): do not
+    /// leave the controller believing that a dead source still owns the speaker.
+    pub(super) fn spotify_unavailable(&mut self) {
+        self.spotify = None;
+        self.spotify_playback = SpotifyPlayback::Idle;
+        self.spotify_owned = false;
+        self.publish_media();
     }
 }

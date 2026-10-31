@@ -110,6 +110,7 @@ struct Rx {
     input: Option<UnboundedReceiver<InputEvent>>,
     lux: Option<UnboundedReceiver<f32>>,
     sendspin: Option<UnboundedReceiver<SendspinEvent>>,
+    spotify: Option<UnboundedReceiver<pulsar_spotify::Event>>,
     zigbee: Option<UnboundedReceiver<ZigbeeEvent>>,
     updater: Option<UnboundedReceiver<UpdateEvent>>,
 }
@@ -128,6 +129,9 @@ pub struct Controller {
     // of a service stops it; the front-end joins its threads (up to ~200 ms of snd_pcm_wait plus
     // the chunk in progress), inside the teardown watchdog that main arms before the drop.
     sendspin: Option<SendspinHandle>,
+    spotify: Option<pulsar_spotify::Handle>,
+    spotify_playback: pulsar_spotify::Playback,
+    spotify_owned: bool,
     zigbee: Option<ZigbeeHandle>,
     updater: UpdaterHandle,
     arbiter: ArbiterHandle,
@@ -465,6 +469,18 @@ impl Controller {
                     (None, None)
                 }
             };
+        let (spotify, spotify_rx) = if ports.offset == 0 {
+            let cfg = pulsar_spotify::Config {
+                name: id.friendly_name.clone(),
+                device_id: id.name.clone(),
+                state_dir: logic::in_dir(&dir, "spotify"),
+                model,
+            };
+            let (h, rx) = pulsar_spotify::spawn(cfg, st.volume);
+            (Some(h), Some(rx))
+        } else {
+            (None, None)
+        };
 
         // A test instance (port offset) stays invisible to HA and Music Assistant.
         let mdns = if ports.offset == 0 {
@@ -537,6 +553,9 @@ impl Controller {
 
         let mut c = Controller {
             sendspin,
+            spotify,
+            spotify_playback: pulsar_spotify::Playback::Idle,
+            spotify_owned: false,
             zigbee,
             updater,
             arbiter,
@@ -556,6 +575,7 @@ impl Controller {
                 input: input_rx,
                 lux: lux_rx,
                 sendspin: sendspin_rx,
+                spotify: spotify_rx,
                 zigbee: zigbee_rx,
                 updater: Some(updater_rx),
             },
@@ -688,6 +708,13 @@ impl Controller {
                     Some(ev) => self.on_sendspin(ev),
                     None => self.rx.sendspin = None,
                 },
+                ev = recv(&mut self.rx.spotify) => match ev {
+                    Some(ev) => self.on_spotify(ev),
+                    None => {
+                        self.rx.spotify = None;
+                        self.spotify_unavailable();
+                    }
+                },
                 ev = recv(&mut self.rx.zigbee) => match ev {
                     Some(ev) => self.on_zigbee(ev),
                     None => self.rx.zigbee = None,
@@ -818,6 +845,22 @@ impl Controller {
         self.sendspin
             .as_ref()
             .is_some_and(SendspinHandle::streaming)
+    }
+
+    /// Spotify holds the speaker only while it actually plays; paused Spotify is surfaced as a
+    /// paused HA media player but does not animate the LEDs or block an automatic update.
+    fn spotify_active(&self) -> bool {
+        matches!(
+            self.spotify_playback,
+            pulsar_spotify::Playback::Playing | pulsar_spotify::Playback::Loading
+        )
+    }
+
+    /// The Spotify state surfaced by the HA media player. A paused session counts only while
+    /// Spotify still owns the speaker; when HA media or Sendspin took over, its pause was a
+    /// consequence of that takeover and the speaker is idle again once they stop.
+    fn spotify_state(&self) -> pulsar_spotify::Playback {
+        logic::spotify_state(self.spotify_playback, self.spotify_owned)
     }
 
     fn zigbee_flashing(&self) -> bool {

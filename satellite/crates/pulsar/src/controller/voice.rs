@@ -9,6 +9,7 @@ use pulsar_esphome::{AnnounceRequest, TimerEvent, TimerInfo, VaEvent};
 use pulsar_lan::arbiter::Claim;
 use pulsar_media::{Channel, PlayState};
 use pulsar_sendspin::Transport;
+use pulsar_spotify::Transport as SpotifyTransport;
 
 use super::logic::{self, COMMAND_AFTER_WAKE_MS, HaTimer, Phase, VoiceCommand};
 use super::{
@@ -636,20 +637,27 @@ impl Controller {
     }
 
     fn owns_music(&self) -> bool {
-        logic::owns_music(
-            now_ms(),
-            self.player.state(Channel::Music),
-            self.music_paused_ms,
-            self.sendspin_streaming(),
-            self.sendspin.as_ref().is_some_and(|ss| ss.connected()),
-            self.sendspin_ended_ms,
-        )
+        self.spotify_owned
+            || logic::owns_music(
+                now_ms(),
+                self.player.state(Channel::Music),
+                self.music_paused_ms,
+                self.sendspin_streaming(),
+                self.sendspin.as_ref().is_some_and(|ss| ss.connected()),
+                self.sendspin_ended_ms,
+            )
     }
 
     /// True when something was playing. Reads the player and Sendspin states before the
     /// commands (neither changes them synchronously, as in C++).
     fn music_pause(&self) -> bool {
         let mut paused = false;
+        if self.spotify_active()
+            && let Some(s) = &self.spotify
+        {
+            s.transport(SpotifyTransport::Pause);
+            paused = true;
+        }
         if matches!(
             self.player.state(Channel::Music),
             PlayState::Playing | PlayState::Loading
@@ -667,7 +675,11 @@ impl Controller {
     }
 
     fn music_resume(&self) {
-        if self.player.state(Channel::Music) == PlayState::Paused {
+        if self.spotify_owned
+            && let Some(s) = &self.spotify
+        {
+            s.transport(SpotifyTransport::Play);
+        } else if self.player.state(Channel::Music) == PlayState::Paused {
             self.player.resume(Channel::Music);
         } else if let Some(ss) = &self.sendspin {
             ss.transport(Transport::Play);
@@ -762,7 +774,16 @@ impl Controller {
                 } else {
                     (Transport::Previous, ClockShot::Previous)
                 };
-                if self.sendspin.as_ref().is_some_and(|ss| ss.transport(t)) {
+                if self.spotify_owned
+                    && let Some(s) = &self.spotify
+                {
+                    s.transport(if c == VoiceCommand::Next {
+                        SpotifyTransport::Next
+                    } else {
+                        SpotifyTransport::Previous
+                    });
+                    self.clock.play(shot);
+                } else if self.sendspin.as_ref().is_some_and(|ss| ss.transport(t)) {
                     self.clock.play(shot);
                 } else {
                     info!("'{word}' ignored: no Sendspin queue to skip in");
