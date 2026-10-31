@@ -45,8 +45,12 @@ say() { echo "=== supervise: $* $(date)" >> "$LOG"; }
 
 give_back() { # Yandex stack again, like ctl.sh disable
   rm -f "$D/enabled"
-  say "$1; disabled, starting the Yandex stack"
-  pidof quasar_launcher2 >/dev/null 2>&1 || "$Q" start >/dev/null 2>&1
+  if [ -f /data/quasar/disable_stock_launcher ]; then
+    say "$1; disabled, stock launcher remains blocked"
+  else
+    say "$1; disabled, starting the Yandex stack"
+    pidof quasar_launcher2 >/dev/null 2>&1 || "$Q" start >/dev/null 2>&1
+  fi
   exit 1
 }
 
