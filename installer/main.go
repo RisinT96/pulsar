@@ -40,8 +40,8 @@ the supported, rooted stations found. Per station:
   report in the log); on failure the previous binary is put back (asked, or automatic with --yes).
 In a repository checkout (satellite/Makefile present) the daemon is built first
 (make; ssh/build.sh for --ssh). Normally only /etc/init.d/S99zpulsar is written outside /data.
---independent opts into a Mini 2 launcher guard and public DNS; it also modifies
-/system/vendor/quasar/run.sh and saves backups. Firmware NTP is unchanged.
+--independent opts into a Mini 2 launcher guard, public DNS and NTP Pool; it also modifies
+/system/vendor/quasar/run.sh and adds /etc/default/chrony, with backups on the station.
 adb: from PATH, else platform-tools/ next to the installer, else downloaded there
 from dl.google.com (Android SDK Platform-Tools 37.0.1; Google's terms apply).
 --list only shows what was found; --yes installs to every station found without asking.
